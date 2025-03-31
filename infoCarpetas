@@ -1,0 +1,15 @@
+build_riscv64x86.sh     contiene el script de bash modificado para usar cpufp con el cross-compiler x86-RISCV
+sgemm 16x8              primer código que da el resultado correcto para multiplicaciones 16x8x16 para matrices en PF con vfmacc
+sgemm int               primer código para operar con enteros, pero aun así usa vfmacc. ¿? No me acuerdo qué hice aquí
+sgemm generico          código de sgemm sin cambios, no me acuerdo para qué era
+sgemm vmadot 4x8        primer código con una sóla operación vmadot para calcular multiplicaciones 4x8x4
+sgemm vmadottest        primer código que experimenta con las transformaciones de matrices necesarias para cargar vmadot
+sgemm vmadotfulltest    primer código que implementa el bucle en ensamblador para extender el código a tamaños mayores, e incorpora función para transformar C.
+sgemmvmadotextensible   primer código para extender el tamaño de matrices de entrada aceptado para cualquier K múltiplo de 8.
+sgemmvmadotmnext        primer código para extender el tamaño de matrices de entrada aceptado para K's multiplos de 8 y M,N's multiplos de 4.
+sgemmvmadotrandom       código para generar matrices random del tamaño que se le quiera dar, y midiendo el tiempo. Corrección de fallos de los dos anteriores vistos al poder generar matrices grandes.
+
+sgemmtimetest           código para medir sólo el tiempo de ejecución del código ensamblador (+ overhead de generar matrices random)
+sgemmunfolding          código para hacer loop unrolling del bucle interno de k hasta 7 iteraciones en una (y opciones para 4 y 2 en caso de que queden menos de 7 iteraciones)
+sgemmedgecase           código para eliminar la limitación de matrices de M,N múltiplos de 4 y K múltiplo de 8. (NO TERMINADO, de hecho es muy complicado)
+
