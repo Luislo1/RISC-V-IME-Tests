@@ -8,7 +8,7 @@
 # c += a * b (alpha=1, no transpose)
 
 #define n a0
-#define m a1
+#define mL a1
 #define k a2
 #define ap a3
 #define k_rem a4
@@ -21,26 +21,18 @@
 #define akp t5
 #define bkp t6
 
-#define ckp s0
-#define cacc s1
-#define macc s2
-#define fct s3
-#define et s4
+#define kmask s0
 
 sgemm_nn:
 
-     addi sp, sp, -64   # Allocate stack space
-     sd s0, 0(sp)   	# Save s0
-     sd s1, 8(sp)   	# Save s1
-     sd s2, 16(sp)
-     sd s3, 24(sp)
-     sd s4, 32(sp)
+    addi sp, sp, -24    # Allocate stack space
+    sd s0, 0(sp)   	    # Save s0
 
-
+    mv s0, k_rem
     mv borg, bp         # Store initial b address
     li t0, 4            # Load auxiliar value to find iteration values. N / 4 & M / 4 (due to 4x8x4 MAC)
     div n, n, t0
-    div m, m, t0
+    div mL, mL, t0
     li t0, 8            # Load auxiliar value to find iteration values. K / 8 (due to 4x8x4 MAC)
     rem k_rem, k, t0
     div k, k, t0
@@ -51,7 +43,7 @@ sgemm_nn:
 	# Outer loop over M (rows of A and C)
 m_loop:
 	# If we've processed all M rows, exit the loop
-	bge mt, m, m_done  
+	bge mt, mL, m_done  
 
 	# Outer loop over N (columns of B and C)
 n_loop:
@@ -100,95 +92,102 @@ k_loop:
 	j k_loop
 
 cleanup_k_loop_start:
-	mv bkp, bp          #TODO verificar que los abc/kps los puedo modificar sin alterar el loop principal
-    mv ckp, cp
-    mv akp, ap
-    li et, 0
-    li fct, 0
-    li kt, 0
-    li macc, 0
+    # Set vector length to handle K_rem elements
+    slli t2, k_rem, 2
+    vsetvli x7, t2, e8, m1   # Load int8 elements (8-bit width)
 
-#y de nuevo todo esto N o M veces, N y M anidados creo
+    li kt, 0                	# Start at the first remaining K index
+    # li mt, 0                 	# Start at row index M
 
-#luego tooodo esto se debe repetir 4 veces
-    # esto se debe repetir k_rem veces para 1 sólo resultado
+cleanup_k_loop:
 
-#repetir k_rem veces además
+	# If kt == K_rem, we're done
+	bge kt, k_rem, cleanup_done
+
+	li mt, 0
+cleanup_m_loop:
+	# If m == M, move to next kr
+	bge mt, mL, cleanup_next_k
+
+	li nt, 0
+cleanup_n_loop:
+	# If n == N, move to next row
+	bge nt, n, cleanup_next_m
+
+	vsetvli x7, zero, e32, m1
+    vmv.v.i v2, 0
+	vmv.v.i v3, 0
+
+    vmv.v.i v0, 0   
+    vle32.v v0, (kmask)
+    vmseq.vi v0, v0, 1
+
+    slli t2, k_rem, 2
+    vsetvli x7, t2, e8, m1   # Load int8 elements (8-bit width)
 
 
-full_chunk_dot_loop:
-    li t1, 4
-    bge et, t1, k_done_edge        #   full_chunk_dot_loop_end
-
-full_row_col_loop:
-    li t1, 4
-    bge fct, t1, full_row_col_loop_end        #   full_chunk_dot_loop_end
-  
-    # bge fct, k_rem, full_row_col_loop_end
-
-
-inner_dot_loop:
-    bge kt, k_rem, inner_dot_loop_end
-	lb t1, 0(ap)
-	lb t2, 0(bp)
-	mul cacc, t1, t2
-    add macc, macc, cacc
-	add bp, bp, 1
-	add ap, ap, 1
-    #como se guarda column major, en realidad bp hay que avanzarlo de 1 en 1, no es 1 * k_rem
-    add kt, kt, 1
-    j inner_dot_loop
-
-inner_dot_loop_end:
-    add fct, fct, 1 
-	sw macc, 0(ckp)
-    add ckp, ckp, 4 # esto ahora depende de k_rem, para los saltos de columna (4*k_rem). Si queremos ir secuencialmente: 4 (32 bits)
-    mv bp, bkp 
-    li t1, 0   
-    mul t1, k_rem, fct
-    add bp, bp, t1 # k_rem * fct (Go to next column)  
-    mv ap, akp
-    li t1, 0   
-    mul t1, k_rem, et
-    add ap, ap, t1 # k_rem * et (Go to next row)  
-    li macc, 0
-    li kt, 0
-    li t1, 0
-    li t2, 0
-    j full_row_col_loop
-
-	# addi nt, nt, 1  # *k_rem ?
-	# j cleanup_n_loop
-    #esto se debe repetir 16 veces; qué hacer con ap y bp?
-
-    #este bloque de código nos da 1 de los 16 resultados necesarios
-
-    #sumarle a bp la iteracion del bucle por la que vamos? Para desfasar la columna a la correcta
-    # add bp, bp, kt #asumo que es kt el iterador del bucle interno
-    #al empezar el bucle, A debe estar en la primera posicion de la fila correspondiente (k_rem * nt)
-full_row_col_loop_end: #ahora repetir 4 veces
-    mv bp, bkp 
-    mv ap, akp
-    add et, et, 1
-    li t1, 0   
-    mul t1, k_rem, et
-    add ap, ap, t1 # k_rem * et (Go to next row)  
-    # mv akp, ap  #TODO check if this impacts bigger matrices
-    li fct, 0
-    # li t1, 0
-    j full_chunk_dot_loop
-    # mv ap, akp
     
 
-#full_chunk_dot_loop_end:
-#    mv bp, bkp     
-#    mv ap, akp   
+	# Load remaining K_rem elements from A[m, K_main + kr]
+	vle8.v v5, (ap)   	# v2 holds A[m, K_main + kr] elements (up to K_rem)
+
+	# Load remaining K_rem elements from B[K_main + kr, n]
+	vle8.v v6, (bp)   	# v6 holds B[K_main + kr, n] elements
+
+    # v4 holds mask
+    # v1 holds packed data
+    # v11 holds input expanded vector and result
+
+
+    viota.m v10, v0                 # Calc iota from mask in v0
+    vrgather.vv v2, v5, v10, v0.t  # Expand into destination
+    vrgather.vv v3, v6, v10, v0.t  # Expand into destination ¿v4.t?
+
+
+    # vrgather.vv v2, v5, v4, v0.t  # Expand into destination
+    # vrgather.vv v3, v6, v4, v0.t  # Expand into destination ¿v4.t?
+
+  	vmadot v16, v2, v3  
+
+    slli t2, k_rem, 2
+    vsetvli x7, t2, e32, m1   # Load int8 elements (8-bit width)
+
+	vadd.vv v0, v0, v16
+	vadd.vv v1, v1, v17  
+
+	vmv.v.i v16, 0
+	vmv.v.i v17, 0
+
+    slli t2, k_rem, 2
+	vsetvli x7, t2, e8, m1
+
+	# Move to the next column in B
+
+     slli t2, k_rem, 2
+	add bp, bp, t2
+	addi nt, nt, 4
+	j cleanup_n_loop
+
+cleanup_next_m:
+	# Move to the next row in A
+	add ap, ap, 4
+	addi mt, mt, 1
+	j cleanup_m_loop
+
+cleanup_next_k:
+	addi kt, kt, 1
+	j cleanup_k_loop
+
+cleanup_done:
+	# Store results from v8 into C
+    vsetvli x7, zero, e8, m1
+	vadd.vv v0, v0, v8
+	vadd.vv v1, v1, v8  
+    mv k_rem, zero
 
 k_done:
     bgt k_rem, zero, cleanup_k_loop_start
     # Restore A and B pointers correctly for next row/column block
-
-k_done_edge:
 	mv ap, akp
 	mv bp, bkp
 	add bp, bp, 32      # Move B to next 8x4 block
@@ -197,17 +196,14 @@ k_done_edge:
 	vsetvli x7, zero, e32, m1
 
 	# Store results into C (matrix)
-    vle32.v v2, (cp)    # Load whatever was on C before, then add it to the new values
-    vadd.vv v0, v0, v2
 	vse32.v v0, (cp)  
 	add cp, cp, 32   	# Update C pointer based on vector length set with vsetvli
-    vle32.v v3, (cp)    # Load whatever was on C before, then add it to the new values
-    vadd.vv v1, v1, v3
 	vse32.v v1, (cp)
     add cp, cp, 32      # Move C to accept next 4x4 block
 
 	# Increment column counter for N loop
 	addi nt, nt, 1
+    
 	j n_loop
 
 n_done:
@@ -225,13 +221,7 @@ n_done:
 	j m_loop
 
 m_done:
-
-     ld s0, 0(sp)   	# Restore s0
-     ld s1, 8(sp)   	# Restore s1
-     ld s2, 16(sp)
-     ld s3, 24(sp)
-     ld s4, 32(sp)
-     addi sp, sp, 64	# Deallocate stack space
-
+    ld s0, 0(sp)   	# Restore s0
+    addi sp, sp, 24	# Deallocate stack space
 	ret
 

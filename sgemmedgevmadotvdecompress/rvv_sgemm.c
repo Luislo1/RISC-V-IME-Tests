@@ -16,6 +16,7 @@ int8_t *b_array_packed_and_transposed;
 int32_t *golden_array;
 int32_t *c_array;
 int32_t *c_array_tr;
+int8_t *remaining_mask;
 
 void sgemm_golden() {
 	for (size_t i = 0; i < MLEN; ++i)
@@ -27,7 +28,7 @@ void sgemm_golden() {
 
 extern void sgemm_nn(size_t size_m, size_t size_n, size_t size_k,
                   	const int8_t *a,
-                  	size_t lda,
+                  	const int8_t *rem_mask, //Changed function signature
                   	const int8_t *b,
                   	size_t ldb,
                   	int32_t *c,
@@ -49,6 +50,7 @@ void reorder_matrix_copy(const int32_t *src, int32_t *dst, size_t blocks_amount_
 void generate_random_matrix(int8_t *matrix, int rows, int cols, int seed) {
 	srand(seed);
 	for (int i = 0; i < rows * cols; i++) {
+        //Modificar para rellenar con ceros hasta K multiplo de 8 y M,N multiplos de 4
     	matrix[i] = (int8_t)(rand() % 201 - 100); // Values between -100 and 100
 	}
 }
@@ -111,7 +113,8 @@ int main(int argc, char *argv[]) {
 	golden_array = (int32_t *)calloc(OUTPUT_LEN, sizeof(int32_t));
 	c_array = (int32_t *)calloc(OUTPUT_LEN, sizeof(int32_t));
 	c_array_tr = (int32_t *)calloc(OUTPUT_LEN, sizeof(int32_t));
-    
+	remaining_mask = (int8_t *)malloc(32 * sizeof(int8_t)); //Array for the mask 
+       
 	generate_random_matrix(a_array, MLEN, KLEN, seed);
 	generate_random_matrix(b_array, KLEN, NLEN, seed + 1);
 
@@ -157,55 +160,34 @@ int main(int argc, char *argv[]) {
         a_array_packed[33] = -73;
         a_array_packed[34] = 82;
         a_array_packed[35] = -16;
+
         b_array_packed_and_transposed[32] = -15;
         b_array_packed_and_transposed[33] = -73;
         b_array_packed_and_transposed[34] = 37;
         b_array_packed_and_transposed[35] = 89;
+        for (int i = 0; i < 32; i++) {
+            remaining_mask[i] = 0;        
+        }
+        remaining_mask[0] = 1;
+        remaining_mask[8] = 1;
+        remaining_mask[16] = 1;
+        remaining_mask[24] = 1;
+        //Prueba hardcodeando iota (No funciona)
+    /*
+        for (int i = 0; i < 8; i++) {
+            remaining_mask[i] = 3; 
+        }
+        for (int i = 8; i < 16; i++) {
+            remaining_mask[i] = 2; 
+        }
+        for (int i = 16; i < 24; i++) {
+            remaining_mask[i] = 1; 
+        }
+        for (int i = 24; i < 32; i++) {
+            remaining_mask[i] = 0; 
+        }
+    */
     }
-
-    if (KLEN == 10) {
-        a_array_packed[8] = -47;
-        a_array_packed[9] = 72;
-        a_array_packed[10] = 34;
-        a_array_packed[11] = -15;
-        a_array_packed[12] = 43;
-        a_array_packed[13] = 0;
-        a_array_packed[14] = 98;
-        a_array_packed[15] = -73;
-        a_array_packed[16] = -44;
-        a_array_packed[17] = 67;
-        a_array_packed[18] = 86;
-        a_array_packed[19] = -94;
-        a_array_packed[20] = -77;
-        a_array_packed[21] = -59;
-        a_array_packed[22] = 82;
-        a_array_packed[23] = -90;
-        a_array_packed[24] = 61;
-        a_array_packed[25] = 29;
-        a_array_packed[26] = 80;
-        a_array_packed[27] = -43;
-        a_array_packed[28] = -38;
-        a_array_packed[29] = -16;
-        a_array_packed[30] = 54;
-        a_array_packed[31] = 30;
-        a_array_packed[32] = 5;
-        a_array_packed[33] = -93;
-        a_array_packed[34] = -9;
-        a_array_packed[35] = -18;
-        a_array_packed[36] = 60;   
-        a_array_packed[37] = -21;  
-        a_array_packed[38] = 63;  
-        a_array_packed[39] = -42;       
-        b_array_packed_and_transposed[32] = -15;
-        b_array_packed_and_transposed[33] = -66;
-        b_array_packed_and_transposed[34] = -73;
-        b_array_packed_and_transposed[35] = -70;
-        b_array_packed_and_transposed[36] = 37;
-        b_array_packed_and_transposed[37] = -85;
-        b_array_packed_and_transposed[38] = 89;
-        b_array_packed_and_transposed[39] = 19;
-    }
-
     printf("Matrix A packed\n");
     print_matrix(a_array_packed, MLEN, KLEN);
     printf("Matrix B packed and transposed\n");
@@ -215,8 +197,9 @@ int main(int argc, char *argv[]) {
     clock_t end = clock();
 	printf("sgemm_golden execution time: %lf seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
 
+
     start = clock();
-	sgemm_nn(NLEN, MLEN, KLEN, a_array_packed, 7, b_array_packed_and_transposed, NLEN, c_array, NLEN);
+	sgemm_nn(NLEN, MLEN, KLEN, a_array_packed, remaining_mask, b_array_packed_and_transposed, NLEN, c_array, NLEN);
     end = clock();
 	printf("sgemm_nn execution time: %lf seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
 

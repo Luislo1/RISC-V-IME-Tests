@@ -23,18 +23,12 @@
 
 #define ckp s0
 #define cacc s1
-#define macc s2
-#define fct s3
-#define et s4
 
 sgemm_nn:
 
-     addi sp, sp, -64   # Allocate stack space
+     addi sp, sp, -24   # Allocate stack space
      sd s0, 0(sp)   	# Save s0
      sd s1, 8(sp)   	# Save s1
-     sd s2, 16(sp)
-     sd s3, 24(sp)
-     sd s4, 32(sp)
 
 
     mv borg, bp         # Store initial b address
@@ -100,95 +94,61 @@ k_loop:
 	j k_loop
 
 cleanup_k_loop_start:
-	mv bkp, bp          #TODO verificar que los abc/kps los puedo modificar sin alterar el loop principal
+	# Set vector length to handle K_rem elements (not needed anymore since we're doing scalar ops)
+	li kt, 0  # Start at the first remaining K index
+	mv bkp, bp
     mv ckp, cp
-    mv akp, ap
-    li et, 0
-    li fct, 0
-    li kt, 0
-    li macc, 0
+    slli n, n, 2
+    # slli m, m, 2
+    slli k_rem, k_rem, 2
 
-#y de nuevo todo esto N o M veces, N y M anidados creo
+cleanup_k_loop:
+	# If kt == K_rem, we're done
+    # esto deberia ser 4 * k_rem
+	bge kt, k_rem, cleanup_done
 
-#luego tooodo esto se debe repetir 4 veces
-    # esto se debe repetir k_rem veces para 1 sólo resultado
+	li mt, 0
 
-#repetir k_rem veces además
+cleanup_m_loop:
+	# If m == M, move to next kr
+	bge mt, m, cleanup_next_k
 
+	li nt, 0
 
-full_chunk_dot_loop:
-    li t1, 4
-    bge et, t1, k_done_edge        #   full_chunk_dot_loop_end
-
-full_row_col_loop:
-    li t1, 4
-    bge fct, t1, full_row_col_loop_end        #   full_chunk_dot_loop_end
-  
-    # bge fct, k_rem, full_row_col_loop_end
-
-
-inner_dot_loop:
-    bge kt, k_rem, inner_dot_loop_end
+cleanup_n_loop:
+	# If n == N, move to next row
+	bge nt, n, cleanup_next_m
+                                     #TODO aqui no se puede usar t0 porque perderiamos mt
 	lb t1, 0(ap)
 	lb t2, 0(bp)
+
 	mul cacc, t1, t2
-    add macc, macc, cacc
-	add bp, bp, 1
+    # add a v0 o v1 dependiendo de por donde vamos;
+	sw cacc, 0(ckp)
+
+	add bp, bp, 1   # *k_rem 
+    add ckp, ckp, 4 # esto ahora depende de k_rem, para los saltos de columna (4*k_rem)
+	addi nt, nt, 1  # *k_rem ?
+	j cleanup_n_loop
+
+cleanup_next_m:
+	# Move to the next row in A
 	add ap, ap, 1
-    #como se guarda column major, en realidad bp hay que avanzarlo de 1 en 1, no es 1 * k_rem
-    add kt, kt, 1
-    j inner_dot_loop
+    mv bp, bkp
+	addi mt, mt, 1
+	j cleanup_m_loop
 
-inner_dot_loop_end:
-    add fct, fct, 1 
-	sw macc, 0(ckp)
-    add ckp, ckp, 4 # esto ahora depende de k_rem, para los saltos de columna (4*k_rem). Si queremos ir secuencialmente: 4 (32 bits)
-    mv bp, bkp 
-    li t1, 0   
-    mul t1, k_rem, fct
-    add bp, bp, t1 # k_rem * fct (Go to next column)  
-    mv ap, akp
-    li t1, 0   
-    mul t1, k_rem, et
-    add ap, ap, t1 # k_rem * et (Go to next row)  
-    li macc, 0
-    li kt, 0
-    li t1, 0
-    li t2, 0
-    j full_row_col_loop
+cleanup_next_k:
+	addi kt, kt, 1
+	j cleanup_k_loop
 
-	# addi nt, nt, 1  # *k_rem ?
-	# j cleanup_n_loop
-    #esto se debe repetir 16 veces; qué hacer con ap y bp?
-
-    #este bloque de código nos da 1 de los 16 resultados necesarios
-
-    #sumarle a bp la iteracion del bucle por la que vamos? Para desfasar la columna a la correcta
-    # add bp, bp, kt #asumo que es kt el iterador del bucle interno
-    #al empezar el bucle, A debe estar en la primera posicion de la fila correspondiente (k_rem * nt)
-full_row_col_loop_end: #ahora repetir 4 veces
-    mv bp, bkp 
-    mv ap, akp
-    add et, et, 1
-    li t1, 0   
-    mul t1, k_rem, et
-    add ap, ap, t1 # k_rem * et (Go to next row)  
-    # mv akp, ap  #TODO check if this impacts bigger matrices
-    li fct, 0
-    # li t1, 0
-    j full_chunk_dot_loop
-    # mv ap, akp
-    
-
-#full_chunk_dot_loop_end:
-#    mv bp, bkp     
-#    mv ap, akp   
+cleanup_done:
+    mv ckp, cp
+	mv k_rem, zero
 
 k_done:
     bgt k_rem, zero, cleanup_k_loop_start
     # Restore A and B pointers correctly for next row/column block
-
-k_done_edge:
 	mv ap, akp
 	mv bp, bkp
 	add bp, bp, 32      # Move B to next 8x4 block
@@ -208,6 +168,9 @@ k_done_edge:
 
 	# Increment column counter for N loop
 	addi nt, nt, 1
+    srli n, n, 2
+    # srli m, m, 2
+    # srli k_rem, k_rem, 2
 	j n_loop
 
 n_done:
@@ -228,10 +191,7 @@ m_done:
 
      ld s0, 0(sp)   	# Restore s0
      ld s1, 8(sp)   	# Restore s1
-     ld s2, 16(sp)
-     ld s3, 24(sp)
-     ld s4, 32(sp)
-     addi sp, sp, 64	# Deallocate stack space
+     addi sp, sp, 24	# Deallocate stack space
 
 	ret
 
